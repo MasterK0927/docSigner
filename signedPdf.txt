@@ -1,0 +1,255 @@
+Digitally Signed PDF contains an array called ByteRange, which contains 4 numbers.
+
+1. Always starts from 0, and shows the start of the pdf.
+2. Shows the start of the signature.
+3. Tells about the last byte of the signature.
+4. Tells us how many bytes are left from the end of the signature to the end of the PDF.
+
+in the image below the fourth value in the ByteRange is 240, meaning if we add the third (960) and fourth values together, we will get the last byte in the pdf which is 1200.
+
+
+There are the steps needed to sign a PDF programmatically are as follows:
+
+    Adding a PDF signature placeholder
+    Creating the signature
+    Visually representing the signature
+
+The hard part of the signing will be done by a library called node-signpdf. It's an open-source package under the MIT license but it's unique in the sense that the authors are happy for you to just take their code and put it in your project without installing the package, which is helpful to pick and choose only the bits we need resulting in a leaner codebase overall.
+
+The certificate is a cryptographic file that digitally proves you are who you say you are. It can only be purchased by a Certificate Authority (like GlobalSign or Entrust) who need to verify you. So a hacker can't pretend they're someone else, for example Google, and sign a document on behalf of them.
+
+The document digest is a hashed version of the document in the state it is before it is signed. Hashing in cryptography is a bit like summarising the whole PDF in a short string of text. This is needed so that if the document is altered after it has been signed, then the signature will be invalid. The timestamp is pretty self-explanatory.
+
+Together these three items form the signature value.
+
+
+Using pdf-lib.js it's possible to create an invisible signature widget or bounding box that takes four values, the top left x and y coordinates, and the width and height. These values will depend on the image you want to use to represent the signature as well as the position you want it in the document so it might take some fiddling around.
+
+    Note: A signature rectangle exists in every signature but by default has four zero values.
+
+
+
+
+////////////////////////////////////////////////////////////////////
+
+
+# How to verify a digital signature from a PDF with Javascript | by Richard Oliver Bray - Freedium
+To follow along please make sure you have access to a signed PDF and a Hexadecimal editor, I use the [Hex VS Code plugin](https://marketplace.visualstudio.com/items?itemName=ms-vscode.hexeditor).
+
+Luckily programmatically finding a signature in a PDF is very simple. The digital embedded signature not only contains the public key and other information about the signer but also the certificate which was used to sign the PDF. We will discuss later how this can be used to verify the signature but for now, let's focus on extraction.
+
+### Extracting the digital signature
+
+A digitally signed PDF contains an array called **ByteRange** which contains 4 numbers. The first number which should always be 0 shows the start of the PDF and the second number shows the start of the signature. The third number tells us where the last byte of the signature is, and the fourth tells us how many bytes are left from the end of the signature to the end of the PDF, so in the image below the fourth value in the ByteRange is 240, meaning if we add the third (960) and fourth values together, we will get the last byte in the pdf which is 1200.
+
+_Image from_ [_Adobe PDF specification_](https://www.adobe.com/content/dam/acom/en/devnet/acrobat/pdfs/DigitalSignaturesInPDF.pdf) _page 5_
+
+With the information from the ByteRange we know exactly where to find the signature in the PDF. Let's see this in code.
+
+Opening a PDF in a Hex editor and doing a search for **ByteRange** will reveal what we're looking for.
+
+As you can see in the above image the ByteRange is \[0, 396362, 401432, 1830\].
+
+_Note: Please keep in mind that there may be multiple ByteRanges in a PDF, this could be because a document has been revised with a new signature so it would make sense to pick the latest ByteRange to have the most up-to-date signature._
+
+We can use the [file system module](https://nodejs.org/api/fs.html#fs_fs_readfilesync_path_options) in Node.js to pass the PDF file into the code as a [Buffer](https://www.youtube.com/watch?v=GlybFFMXXmQ). We need it to be a buffer so that the file can be streamed meaning we don't wait for the whole PDF to be loaded in before we start reading from it.
+
+```
+const pdf = fs.readFileSync("../test.pdf");
+```
+
+
+_Note: The final code for this article can be found here_ [_https://github.com/RichardBray/pdf\_verify/blob/main/src/index.js_](https://github.com/RichardBray/pdf_verify/blob/main/src/index.js)
+
+Once the PDF buffer has been passed in as an argument we can use the .indexOf method similar to Strings and Arrays in Javascript to find the index of the ByteRange, the code for that could look something like this:
+
+```
+const byteRangeStart = pdf.indexOf("/ByteRange[");
+const byteRangeEnd = pdf.indexOf("]", byteRangePos);
+```
+
+
+_Note: There are some PDFs that have a space between the_ _**e**_ _in ByteRange and the square bracket_ _**\[**__. To avoid unnecessary errors in the code, it may make sense to add a condition that accounts for both scenarios._
+
+We can then use the .slice method on the PDF to get the ByteRange array then convert it to a string or do whatever further manipulations we want to get the four numbers.
+
+```
+const byteRange = pdf.slice(byteRangeStart, byteRangeEnd + 1).toString();
+const byteRangeNumbers = /(\d+) +(\d+) +(\d+) +(\d+)/.exec(byteRange);
+const byteRangeArr = byteRangeNumbers[0].split(" ");
+```
+
+
+Then we can extract the signature and convert it to binary with the following code:
+
+```
+const signatureHexWithBuffer = pdf
+  .slice(byteRangeArr[1] + 1, byteRange[2] - 1)
+  .toString("binary");
+const signatureHex = signatureHexWithBuffer.replace(/(?:00)*$/, "");
+const signature = Buffer.from(signatureHex, "hex").toString("binary");
+```
+
+
+_Note: The (+ 1) and (- 1) additions to remove the leading_ _**<**_ _and trailing_ _**\>**_ _from the Contents._
+
+_Note: the regex for the_ _**signatureHex**_ _variable is needed to remove the extra zeros at the end of a signature. These 0s are there because the actual signature is always smaller than the space given to it by the signature placeholder._ _[Read more about that here](https://medium.com/caution-your-blast/how-to-digitally-sign-a-pdf-programmatically-using-javascript-nodejs-54194af7bdc3)__._
+
+The binary version of the signature will be used to verify it's correct by comparing it with the certificate that was used to sign the document.
+
+While we're here we can also extract the non-signature PDF data, this will also be used for verification since the whole PDF document is encrypted during the signing stage we can make sure there has been no tampering by comparing the signature with the contents of the PDF giving further verification. To do that we can use the _**Buffer.concat**_ method with .slice to give the following code:
+
+```
+const signedData = Buffer.concat([
+  pdf.slice(byteRange[0], byteRange[1]),
+  pdf.slice(
+    byteRange[2], 
+    byteRange[2] + byteRange[3]
+  ),
+]);
+```
+
+
+At the end of this section, we should have two important variables, **signature** and **signedData**. These will be used in the next section
+
+### Verifying the digital signature
+
+Verifying a digital signature is done in two stages:
+
+1.  Comparing the signature with the certificate
+2.  Comparing the signature with the pdf document
+
+Let's go through those stages in detail.
+
+#### 1\. Comparing the signature with the certificate
+
+When a PDF is signed with a digital signature, details of the certificate that was used to sign the document is embedded in the PDF, so there is no need to compare a signature with a separate certificate to what is already in the signature.
+
+_Image from_ [_Adobe PDF specification_](https://www.adobe.com/content/dam/acom/en/devnet/acrobat/pdfs/DigitalSignaturesInPDF.pdf) _page 4_
+
+To get the certificate from the signature, we need to decode and uncompress the signature which is encoded in ASN.1 and DER (don't worry if you're not sure what that is). Luckily [node-forge](https://github.com/digitalbazaar/forge) does all the complicated stuff for us so we don't have to worry about that. The uncompressed, decoded signature, which we will call _'message'_, can be retrieved with the following code:
+
+```
+// Top of file
+import forge from "node-forge";
+// ...
+// signature variable from previous section used below
+const p7Asn1 = forge.asn1.fromDer(signature);
+const message = forge.pkcs7.messageFromAsn1(p7Asn1);
+```
+
+
+Message is an object that contains a lot of values (which I urge you to look through if you have the time), but the thing we're most interested in at the moment is the **certificates** array and the **rawCapture** object.
+
+RawCapture contains a lot of things we will use later down the line but for now, we just need the signature from it which contains the encoded signature value.
+
+After that, we need to create something called a _verifier_ which will check if our **rawCapture signature** and our **certificate** from the certificates array match. RawCapture also provides authentication attributes this can be used to create the binary buffer for our verifier. We can do all of this with the following code:
+
+```
+// Top of file
+import crypto from "node:crypto";
+// ...
+const set = forge.asn1.create(
+  forge.asn1.Class.UNIVERSAL,
+  forge.asn1.Type.SET,
+  true,
+  message.rawCapture.authenticatedAttributes
+);
+const buf = Buffer.from(forge.asn1.toDer(set).data, "binary");
+const verifier = crypto.createVerify(`RSA-${hashAlgorithm}`);
+verifier.update(buf);
+```
+
+
+As you can see, we have encoded our buffer data in ASN.1 which we have assigned to the **set** variable. We then use a library called **crypto** which is part of Node.js to create a verifier from the **hashAlgorithm** which we will talk more about now.
+
+PDFs can be encoded with different secure hash algorithms (SHA), and to verify our signature and certificate match we need to decode them with the same SHA (usually either SHA-1 or SHA-256). Again we can get which SHA from the rawCapture digestAlgorithm value.
+
+We decode the digestAlgorithm from ASN.1 in the same way we've been doing it before, but in order to read it as a string, we first need to convert it to an [object identifier](https://en.wikipedia.org/wiki/Object_identifier) (OID), then read it through the public key infrastructure (PKI). To be honest, this is going far beyond my cryptography knowledge so the explanations here are becoming a bit vague but you don't need to know a lot to get a small understanding of what is going on. The code for getting the hash algorithm looks like this:
+
+```
+const { digestAlgorithm } = message.rawCapture;
+const hashAlgorithmOid = forge.asn1.derToOid(digestAlgorithm);
+const hashAlgorithm = forge.pki.oids.hashAlgorithmOid.toUpperCase();
+```
+
+
+Okay I hope you're still with me, we're almost there. I know I've already explained how to get the certificate and the signature but let's show that in code. We can use PKI to convert the certificate to a privacy-enhanced mail (PEM) file since that's the format the verifier reads (don't ask why). So all the code for getting our values and verifying them looks like this:
+
+```
+const sig = message.rawCapture.signature;
+const cert = forge.pki.certificateToPem(message.certificates[0]);
+const validAuthenticatedAttributes = verifier.verify(cert, sig, "binary");
+if (!validAuthenticatedAttributes)
+  throw new Error("Wrong authenticated attributes");
+```
+
+
+And that's the first check done. If this fails then the signature does not match the certificate provided and the PDF signature is not valid.
+
+Now let's move on to the next stage of verification.
+
+#### 2\. Comparing the signature with the pdf document
+
+When a PDF is signed, a hash of the whole PDF is computed using an algorithm like SHA-256, this hash is included in the signature. A hash in this case is a small summary of the whole PDF file (excluding the bit with the signature) in hexadecimal.
+
+We need to extract that has and compare it with the non-signature parts of the PDF to make sure the PDF hasn't been tampered in any way. To do so, we need to:
+
+*   **generate a hash** of the PDF with the same hashing algorithm that was used for the signature
+*   **compare that hash** with the hash of the PDF that is already in the signature.
+
+A hash of the non-signature part of the PDF can be generated with the following code:
+
+```
+const pdfHash = crypto.createHash(hashAlgorithm);
+// Below we make use of the signedData variable from the 'Extrating digital signature' section
+pdfHash.update(signedData);
+```
+
+
+Now we can compare our newly created hash with the hash from the signature also called, the [message digest](https://www.techopedia.com/definition/4024/message-digest#:~:text=A%20message%20digest%20is%20a,any%20part%20of%20a%20message.&text=One%20message%20digest%20is%20assigned%20to%20particular%20data%20content.). We get the message digest with the following code:
+
+```
+const attrs = message.rawCapture.authenticatedAttributes;
+const { oids } = forge.pki;
+const fullAttrDigest = attrs.find(
+  (attr) => forge.asn1.derToOid(attr.value[0].value) === oids.messageDigest
+);
+const attrDigest = fullAttrDigest.value[1].value[0].value;
+```
+
+
+Fantastic. We can now make a comparison between the message digest and our PDF hash with the following code:
+
+```
+const dataDigest = pdfHash.digest();
+const validContentDigest = dataDigest.toString("binary") === attrDigest;
+if (validContentDigest) {
+  console.log("Signature is valid!!!");
+} else {
+  throw new Error("Wrong content digest");
+}
+```
+
+
+As you can see from the code above if both values match then the signature is valid, if they don't then the signature is not valid.
+
+For more information about this specific part of the process I highly recommend you check out page 6 (particularly the top part) of the [Adobe documentation](https://www.adobe.com/devnet-docs/etk_deprecated/tools/DigSig/Acrobat_DigitalSignatures_in_PDF.pdf). I kind of skip over the complicated cryptography parts.
+
+Congrats, you made it to the end of this article 🎉 I tried to make it sound interesting but I know it's a lot of boring stuff.
+
+Again you can view the final code here [https://github.com/RichardBray/pdf\_verify/blob/main/src/index.js](https://github.com/RichardBray/pdf_verify/blob/main/src/index.js)
+
+### Sources
+
+Below are the links I used to get the information to write this document. Please feel free to read them if you would like more information about PDF signature verification. In no particular order:
+
+[https://github.com/MohammedEssehemy/node-sign-validate-pdf/blob/master/script.js](https://github.com/MohammedEssehemy/node-sign-validate-pdf/blob/master/script.js)
+
+[https://stackoverflow.com/questions/15969733/verify-pkcs7-pem-signature-unpack-data-in-node-js](https://stackoverflow.com/questions/15969733/verify-pkcs7-pem-signature-unpack-data-in-node-js)
+
+[https://github.com/vbuch/node-signpdf/blob/master/src/signpdf.js](https://github.com/vbuch/node-signpdf/blob/master/src/signpdf.js)
+
+[https://github.com/ninja-labs-tech/verify-pdf/blob/master/lib/verifyPDF.js](https://github.com/ninja-labs-tech/verify-pdf/blob/master/lib/verifyPDF.js)
+
+[https://www.adobe.com/devnet-docs/etk\_deprecated/tools/DigSig/Acrobat\_DigitalSignatures\_in\_PDF.pdf](https://www.adobe.com/devnet-docs/etk_deprecated/tools/DigSig/Acrobat_DigitalSignatures_in_PDF.pdf)

@@ -70,7 +70,7 @@ async function signPdfWithSignedHash(pdfPath, outputPath, signedHash) {
   }
 }
 
-const pdfPath = 'signed.pdf';
+const pdfPath = 'Schedule.pdf';
 
 const outputPath = 'signed-document.pdf';
 
