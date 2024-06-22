@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "dependencies": {
     "@signpdf/signpdf": "^3.2.4",
     "crypto": "^1.0.1",

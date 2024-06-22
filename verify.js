@@ -1,19 +1,17 @@
-import forge from 'node-forge'; // Importing node-forge for cryptographic operations
-import crypto from 'crypto'; // Importing Node.js crypto module for cryptographic functions
-import fs from 'fs'; // Importing Node.js fs module for file system operations
+import forge from 'node-forge';
+import crypto from 'crypto';
+import fs from 'fs';
 
 export class VerifyPdf {
-  // Method to extract signature and signed data from the PDF
   getSignature(pdf) {
-    let byteRangePos = pdf.lastIndexOf('/ByteRange['); // Find the position of "/ByteRange["
-    if (byteRangePos === -1) byteRangePos = pdf.lastIndexOf('/ByteRange ['); // Also check for "/ByteRange ["
+    let byteRangePos = pdf.lastIndexOf('/ByteRange[');
+    if (byteRangePos === -1) byteRangePos = pdf.lastIndexOf('/ByteRange [');
 
-    const byteRangeEnd = pdf.indexOf(']', byteRangePos); // Find the end of the byte range
-    const byteRange = pdf.slice(byteRangePos, byteRangeEnd + 1).toString(); // Extract the byte range string
-    const byteRangeNumbers = /(\d+) +(\d+) +(\d+) +(\d+)/.exec(byteRange); // Extract byte range numbers
-    const byteRangeArr = byteRangeNumbers[0].split(' '); // Split byte range numbers
+    const byteRangeEnd = pdf.indexOf(']', byteRangePos);
+    const byteRange = pdf.slice(byteRangePos, byteRangeEnd + 1).toString();
+    const byteRangeNumbers = /(\d+) +(\d+) +(\d+) +(\d+)/.exec(byteRange);
+    const byteRangeArr = byteRangeNumbers[0].split(' ');
 
-    // Extract the signed data based on byte offsets
     const signedData = Buffer.concat([
       pdf.slice(parseInt(byteRangeArr[0]), parseInt(byteRangeArr[1])),
       pdf.slice(
@@ -22,33 +20,59 @@ export class VerifyPdf {
       ),
     ]);
 
-    // Extract the signature bytes
     let signatureHex = pdf
       .slice(
         parseInt(byteRangeArr[0]) + (parseInt(byteRangeArr[1]) + 1),
         parseInt(byteRangeArr[2]) - 1,
       )
       .toString('binary');
-    signatureHex = signatureHex.replace(/(?:00)*$/, ''); // Remove trailing null bytes
-    const signature = Buffer.from(signatureHex, 'hex').toString('binary'); // Convert signature to binary string
-    return { signature, signedData }; // Return extracted signature and signed data
+    signatureHex = signatureHex.replace(/(?:00)*$/, '');
+    const signature = Buffer.from(signatureHex, 'hex').toString('binary');
+
+    console.log('==== Extracted Signature Data ====');
+    console.log('Byte Range:', byteRange);
+    console.log('Byte Range Numbers:', byteRangeNumbers);
+    console.log('Byte Range Array:', byteRangeArr);
+    console.log('Signed Data:', signedData);
+    console.log('Signature Hex:', signatureHex);
+    console.log('Signature:', signature);
+    console.log('==================================');
+
+    return { signature, signedData };
   }
 
-  // Method to verify the PDF signature
   verify(pdf) {
-    // Extracting the message from the signature
-    const extractedData = this.getSignature(pdf); // Get signature and signed data from PDF
-    const p7Asn1 = forge.asn1.fromDer(extractedData.signature); // Parse ASN.1 structure from DER-encoded signature
-    const message = forge.pkcs7.messageFromAsn1(p7Asn1); // Parse PKCS#7 message from ASN.1 structure
+    const extractedData = this.getSignature(pdf);
 
-    // Extract necessary components for verification
+    console.log('==== Extracted Data ====');
+    console.log('Extracted Signature:', extractedData.signature);
+    console.log('Extracted Signed Data:', extractedData.signedData);
+    console.log('========================');
+
+    const p7Asn1 = forge.asn1.fromDer(extractedData.signature);
+
+    console.log('==== PKCS#7 ASN.1 Structure ====');
+    console.log(p7Asn1);
+    console.log('================================');
+
+    const message = forge.pkcs7.messageFromAsn1(p7Asn1);
+
+    console.log('==== PKCS#7 Message ====');
+    console.log(message);
+    console.log('========================');
+
     const {
       signature: sig,
       digestAlgorithm,
-      authenticatedAttributes: attrs, // Authenticated attributes
+      authenticatedAttributes: attrs,
     } = message.rawCapture;
 
-    // Create SET of authenticated attributes
+    console.log('==== Signature Components ====');
+    console.log('Signature:', sig);
+    console.log('Digest Algorithm:', digestAlgorithm);
+    console.log('Authenticated Attributes:', attrs);
+    console.log('==============================');
+
     const set = forge.asn1.create(
       forge.asn1.Class.UNIVERSAL,
       forge.asn1.Type.SET,
@@ -56,49 +80,91 @@ export class VerifyPdf {
       attrs,
     );
 
-    // Find hash algorithm OID
-    const hashAlgorithmOid = forge.asn1.derToOid(digestAlgorithm);
-    const hashAlgorithm = forge.pki.oids[hashAlgorithmOid].toUpperCase(); // Get hash algorithm
+    console.log('==== SET of Authenticated Attributes ====');
+    console.log(set);
+    console.log('=========================================');
 
-    // Create verifier using RSA and hash algorithm
+    const hashAlgorithmOid = forge.asn1.derToOid(digestAlgorithm);
+    const hashAlgorithm = forge.pki.oids[hashAlgorithmOid].toUpperCase();
+
+    console.log('==== Hash Algorithm ====');
+    console.log('Hash Algorithm OID:', hashAlgorithmOid);
+    console.log('Hash Algorithm:', hashAlgorithm);
+    console.log('========================');
+
     const buf = Buffer.from(forge.asn1.toDer(set).data, 'binary');
     const verifier = crypto.createVerify(`RSA-${hashAlgorithm}`);
-    verifier.update(buf); // Update verifier with SET of authenticated attributes
+    verifier.update(buf);
 
-    // Verify the signature against the certificate
-    const cert = forge.pki.certificateToPem(message.certificates[0]); // Get PEM-formatted certificate
+    console.log('==== Verifier ====');
+    console.log(verifier);
+    console.log('==================');
+
+    const cert = forge.pki.certificateToPem(message.certificates[0]);
+
+    console.log('==== Certificate ====');
+    console.log(cert);
+    console.log('=====================');
+
     const validAuthenticatedAttributes = verifier.verify(cert, sig, 'binary');
+
+    console.log(
+      '==== Valid Authenticated Attributes ====',
+      validAuthenticatedAttributes,
+    );
+    console.log('========================================');
+
     if (!validAuthenticatedAttributes)
       throw new Error('Wrong authenticated attributes');
 
-    // Calculate hash of the non-signature part of PDF
     const pdfHash = crypto.createHash(hashAlgorithm);
+
+    console.log('==== PDF Hash ====');
+    console.log(pdfHash);
+    console.log('==================');
+
     const data = extractedData.signedData;
     pdfHash.update(data);
 
-    // Extract message digest from authenticated attributes
+    console.log('==== Updated PDF Hash ====');
+    console.log(pdfHash);
+    console.log('==========================');
+
     const oids = forge.pki.oids;
     const fullAttrDigest = attrs.find(
       (attr) => forge.asn1.derToOid(attr.value[0].value) === oids.messageDigest,
     );
     const attrDigest = fullAttrDigest.value[1].value[0].value;
 
-    // Compare message digest to computed PDF hash
+    console.log('==== Attribute Digest ====');
+    console.log(attrDigest);
+    console.log('==========================');
+
     const dataDigest = pdfHash.digest();
+
+    console.log('==== Data Digest ====');
+    console.log(dataDigest);
+    console.log('=====================');
+
     const validContentDigest = dataDigest.toString('binary') === attrDigest;
+
+    console.log('==== Valid Content Digest ====', validContentDigest);
+    console.log('==============================');
+
     if (validContentDigest) {
       const greenText = '\x1b[32m%s\x1b[0m';
-      console.log(greenText, 'Signature is valid!!!'); // Output if signature is valid
+      console.log(greenText, 'Signature is valid!!!');
     } else {
-      throw new Error('Wrong content digest'); // Throw error if content digest does not match
+      throw new Error('Wrong content digest');
     }
   }
 }
 
-// Main function to run verification
 function main() {
   const sign = new VerifyPdf();
-  sign.verify(fs.readFileSync('signed.pdf')); // Read and verify the specified PDF
+  sign.verify(
+    fs.readFileSync('/home/keshav/Desktop/pdfSignTest/other/signed-out.pdf'),
+  );
 }
 
-main(); // Execute main function
+main();

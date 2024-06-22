@@ -1,3 +1,5 @@
 /Schedule.pdf
 /signed-document.pdf
 /signed.pdf
+node_modules
+/pkcs11js
