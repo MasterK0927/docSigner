@@ -1,5 +1,12 @@
-/Schedule.pdf
-/signed-document.pdf
-/signed.pdf
+Schedule.pdf
+signed-document.pdf
+signed.pdf
 node_modules
-/pkcs11js
+/kcs11js
+hash.js
+logfile.log
+Sample-signed.pdf
+signed-document.pdf
+signed-Sample.pdf
+verifier.js
+pdf_sign
