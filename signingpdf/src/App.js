@@ -46,6 +46,7 @@ function App() {
       <input type="file" onChange={handlePdfChange} accept="application/pdf" />
       <input type="file" onChange={handleCertChange} accept=".pem" />
       <button onClick={handleSignPdf}>Sign PDF</button>
+      <button>Verify Pdf</button>
     </div>
   );
 }

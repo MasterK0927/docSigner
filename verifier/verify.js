@@ -4,6 +4,7 @@ import fs from 'fs';
 
 export class VerifyPdf {
   getSignature(pdf) {
+    console.log(pdf);
     let byteRangePos = pdf.lastIndexOf('/ByteRange[');
     if (byteRangePos === -1) byteRangePos = pdf.lastIndexOf('/ByteRange [');
 
@@ -162,7 +163,7 @@ export class VerifyPdf {
 
 function main() {
   const sign = new VerifyPdf();
-  sign.verify(fs.readFileSync('/home/keshav/Desktop/pdf/signed-Sample.pdf'));
+  sign.verify(fs.readFileSync('/home/keshav/Desktop/pdf/signed.pdf'));
 }
 
 main();
