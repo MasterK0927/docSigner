@@ -116,8 +116,8 @@ const testSignPDF = (pdfFile, certFile, sigHash) => {
 };
 
 // Usage example
-const pdfFile = 'Sample.pdf';
-const certFile = 'uday-cert.pem';
+const pdfFile = '../signed.pdf';
+const certFile = '/home/keshav/Desktop/certificate/certificate.pem';
 const sigHash =
   '6129f7c2d451c87d0693deb397d2d06a714ba954bcc866e69d642779b4b0a06e0744c36d67b71c861c8d8255590dad87db5ac0d7fa983164374f57bb758f823249264acd9f9b044df7d8ab8a08e1b6cf0a868fea3a021b9ba899a720402a9beeab377a3d2a9e98a26ee4666fbde0fbe91678fae2b63add600dbeb94af126a494b5d26722409c46f18d64d7d68db027d88637d1cfd986341d2e0dd2844265b9e1754506c299d610946d2156395d2d673bdebbc778fde4457f3d133bcd7e03e057f23808523e6c144ccd649d1ce9da1c647145a9517753e2a4fea1909b6544c398485a099f08c8c0828ea31afc0c2be3e55f920a9ff5bbdec4596ae300e2622255';
 
