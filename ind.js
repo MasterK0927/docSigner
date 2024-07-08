@@ -56,7 +56,8 @@ const addPlaceholder = async (
 };
 
 const signpdf = (pdfBuffer, certificate, signatureHash) => {
-  const signerName = certificate.subject.getField('CN').value;
+  // const signerName = certificate.subject.getField('CN').value;
+  const signerName = 'placeholder';
 
   pdfBuffer = plainAddPlaceholder({
     pdfBuffer,
@@ -140,10 +141,79 @@ const signpdf = (pdfBuffer, certificate, signatureHash) => {
   return pdf;
 };
 
-const server = new WebSocketServer({ port: 5000 });
+// Create two separate WebSocket servers
+const clientServer = new WebSocketServer({ port: 5000 });
+const extensionServer = new WebSocketServer({ port: 5001 });
 
-server.on('connection', (ws) => {
+let extensionSocket = null;
+let waitingClientSocket = null;
+let pdfDataToSign = null;
+
+// Handle extension connections
+extensionServer.on('connection', (ws) => {
+  console.log('Extension connected');
+  extensionSocket = ws;
+
   ws.on('message', async (message) => {
+    console.log('Received message from extension:', message);
+    const { action, data } = JSON.parse(message);
+    if (action === 'certAndSignResponse') {
+      try {
+        const { cert, signedHash } = data;
+        const certificate = forge.pki.certificateFromPem(cert);
+        // const signerName = certificate.subject.getField('CN').value;
+        const signerName = 'placeholder';
+
+        // Add placeholder
+        const pdfWithPlaceholder = await addPlaceholder(
+          Buffer.from(pdfDataToSign.pdfBuffer),
+          signerName,
+          pdfDataToSign.pageIndex,
+          pdfDataToSign.selectionCoords,
+        );
+
+        // Sign PDF
+        const signedPdf = signpdf(pdfWithPlaceholder, certificate, signedHash);
+
+        // Send signed PDF back to the client
+        waitingClientSocket.send(
+          JSON.stringify({
+            action: 'signed',
+            data: signedPdf.toString('base64'),
+          }),
+        );
+
+        // Clear the waiting client socket and pdf data
+        waitingClientSocket = null;
+        pdfDataToSign = null;
+      } catch (error) {
+        console.error('Error processing cert and sign response:', error);
+        if (waitingClientSocket) {
+          waitingClientSocket.send(
+            JSON.stringify({
+              action: 'error',
+              message:
+                'Error processing cert and sign response: ' + error.message,
+            }),
+          );
+          waitingClientSocket = null;
+          pdfDataToSign = null;
+        }
+      }
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('Extension disconnected');
+    extensionSocket = null;
+  });
+});
+
+// Handle client connections
+clientServer.on('connection', (ws) => {
+  console.log('Client connected');
+  ws.on('message', async (message) => {
+    console.log('Received message from client:', message);
     let parsedMessage;
     try {
       parsedMessage = JSON.parse(message);
@@ -160,67 +230,31 @@ server.on('connection', (ws) => {
     switch (action) {
       case 'sign':
         try {
+          console.log('Sign action received');
           const { pdfBuffer, pageIndex, selectionCoords } = data;
           if (!pdfBuffer || pageIndex === undefined || !selectionCoords) {
             throw new Error('Missing required data for signing');
           }
 
-          // Connect to browser extension
-          const extensionWs = new WebSocket('ws://localhost:extension-port');
+          if (!extensionSocket) {
+            throw new Error('Extension is not connected');
+          }
 
-          extensionWs.on('open', () => {
-            // Request certificate and signature
-            const md_hash = forge.md.sha256
-              .create()
-              .update(pdfBuffer)
-              .digest()
-              .toHex();
-            extensionWs.send(
-              JSON.stringify({ action: 'getCertAndSign', data: { md_hash } }),
-            );
-          });
+          // Request certificate and signature from the extension
+          const mdhash = forge.md.sha256
+            .create()
+            .update(pdfBuffer)
+            .digest()
+            .toHex();
+          extensionSocket.send(
+            JSON.stringify({ action: 'getCertAndSign', data: { mdhash } }),
+          );
 
-          extensionWs.on('message', async (extMessage) => {
-            const { cert, signedHash } = JSON.parse(extMessage);
+          console.log('Sent getCertAndSign to extension');
 
-            const certificate = forge.pki.certificateFromPem(cert);
-            const signerName = certificate.subject.getField('CN').value;
-
-            // Add placeholder
-            const pdfWithPlaceholder = await addPlaceholder(
-              Buffer.from(pdfBuffer),
-              signerName,
-              pageIndex,
-              selectionCoords,
-            );
-
-            // Sign PDF
-            const signedPdf = signpdf(
-              pdfWithPlaceholder,
-              certificate,
-              signedHash,
-            );
-
-            // Send signed PDF back to original connection
-            ws.send(
-              JSON.stringify({
-                action: 'signed',
-                data: signedPdf.toString('base64'),
-              }),
-            );
-
-            extensionWs.close();
-          });
-
-          extensionWs.on('error', (error) => {
-            console.error('WebSocket error with extension:', error);
-            ws.send(
-              JSON.stringify({
-                action: 'error',
-                message: 'Error communicating with extension',
-              }),
-            );
-          });
+          // Store the client socket and pdf data to respond later
+          waitingClientSocket = ws;
+          pdfDataToSign = { pdfBuffer, pageIndex, selectionCoords };
         } catch (error) {
           console.error('Error signing PDF:', error);
           ws.send(
@@ -234,6 +268,7 @@ server.on('connection', (ws) => {
 
       case 'verify':
         try {
+          console.log('Verify action received');
           const { Buff } = data;
           if (!Buff) {
             throw new Error('Missing PDF buffer for verification');
@@ -244,6 +279,7 @@ server.on('connection', (ws) => {
           const isVerified = await verifier.verify(pdfBuffer);
 
           ws.send(JSON.stringify({ action: 'verified', verified: isVerified }));
+          console.log('Sent verification result to client');
         } catch (error) {
           console.error('Error verifying PDF:', error);
           ws.send(
@@ -256,10 +292,16 @@ server.on('connection', (ws) => {
         break;
 
       default:
+        console.error('Unknown action:', action);
         ws.send(JSON.stringify({ action: 'error', message: 'Unknown action' }));
         break;
     }
   });
+
+  ws.on('close', () => {
+    console.log('Client disconnected');
+  });
 });
 
-console.log('WebSocket server is running on port 5000');
+console.log('Client WebSocket server is running on port 5000');
+console.log('Extension WebSocket server is running on port 5001');
