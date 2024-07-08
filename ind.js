@@ -56,8 +56,7 @@ const addPlaceholder = async (
 };
 
 const signpdf = (pdfBuffer, certificate, signatureHash) => {
-  // const signerName = certificate.subject.getField('CN').value;
-  const signerName = 'placeholder';
+  const signerName = certificate.subject.getField('CN').value;
 
   pdfBuffer = plainAddPlaceholder({
     pdfBuffer,
@@ -141,76 +140,44 @@ const signpdf = (pdfBuffer, certificate, signatureHash) => {
   return pdf;
 };
 
-// Create two separate WebSocket servers
-const clientServer = new WebSocketServer({ port: 5000 });
-const extensionServer = new WebSocketServer({ port: 5001 });
+// Create a WebSocket server for clients
+const server = new WebSocketServer({ port: 5000 });
 
-let extensionSocket = null;
-let waitingClientSocket = null;
-let pdfDataToSign = null;
+// Generate a new key pair and certificate (hardcoded for now)
+const generateKeyPairAndCertificate = () => {
+  const keys = forge.pki.rsa.generateKeyPair(2048);
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = keys.publicKey;
+  cert.serialNumber = '01';
+  cert.validity.notBefore = new Date();
+  cert.validity.notAfter = new Date();
+  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+  const attrs = [
+    { name: 'commonName', value: 'localhost' },
+    { name: 'countryName', value: 'US' },
+    { shortName: 'ST', value: 'Virginia' },
+    { name: 'localityName', value: 'Blacksburg' },
+    { name: 'organizationName', value: 'Test' },
+    { shortName: 'OU', value: 'Test' },
+  ];
+  cert.setSubject(attrs);
+  cert.setIssuer(attrs);
+  cert.sign(keys.privateKey);
 
-// Handle extension connections
-extensionServer.on('connection', (ws) => {
-  console.log('Extension connected');
-  extensionSocket = ws;
+  return { keys, cert };
+};
 
-  ws.on('message', async (message) => {
-    console.log('Received message from extension:', message);
-    const { action, data } = JSON.parse(message);
-    if (action === 'certAndSignResponse') {
-      try {
-        const { cert, signedHash } = data;
-        const certificate = forge.pki.certificateFromPem(cert);
-        // const signerName = certificate.subject.getField('CN').value;
-        const signerName = 'placeholder';
+const { keys, cert } = generateKeyPairAndCertificate();
 
-        // Add placeholder
-        const pdfWithPlaceholder = await addPlaceholder(
-          Buffer.from(pdfDataToSign.pdfBuffer),
-          signerName,
-          pdfDataToSign.pageIndex,
-          pdfDataToSign.selectionCoords,
-        );
-
-        // Sign PDF
-        const signedPdf = signpdf(pdfWithPlaceholder, certificate, signedHash);
-
-        // Send signed PDF back to the client
-        waitingClientSocket.send(
-          JSON.stringify({
-            action: 'signed',
-            data: signedPdf.toString('base64'),
-          }),
-        );
-
-        // Clear the waiting client socket and pdf data
-        waitingClientSocket = null;
-        pdfDataToSign = null;
-      } catch (error) {
-        console.error('Error processing cert and sign response:', error);
-        if (waitingClientSocket) {
-          waitingClientSocket.send(
-            JSON.stringify({
-              action: 'error',
-              message:
-                'Error processing cert and sign response: ' + error.message,
-            }),
-          );
-          waitingClientSocket = null;
-          pdfDataToSign = null;
-        }
-      }
-    }
-  });
-
-  ws.on('close', () => {
-    console.log('Extension disconnected');
-    extensionSocket = null;
-  });
-});
+// Function to sign the hash (previously done by the extension)
+const signHash = (hashToSign) => {
+  const md = forge.md.sha256.create();
+  md.update(hashToSign, 'hex');
+  return keys.privateKey.sign(md);
+};
 
 // Handle client connections
-clientServer.on('connection', (ws) => {
+server.on('connection', (ws) => {
   console.log('Client connected');
   ws.on('message', async (message) => {
     console.log('Received message from client:', message);
@@ -236,25 +203,34 @@ clientServer.on('connection', (ws) => {
             throw new Error('Missing required data for signing');
           }
 
-          if (!extensionSocket) {
-            throw new Error('Extension is not connected');
-          }
-
-          // Request certificate and signature from the extension
-          const mdhash = forge.md.sha256
-            .create()
-            .update(pdfBuffer)
-            .digest()
-            .toHex();
-          extensionSocket.send(
-            JSON.stringify({ action: 'getCertAndSign', data: { mdhash } }),
+          // Add placeholder
+          const pdfWithPlaceholder = await addPlaceholder(
+            Buffer.from(pdfBuffer, 'base64'),
+            cert.subject.getField('CN').value,
+            pageIndex,
+            selectionCoords,
           );
 
-          console.log('Sent getCertAndSign to extension');
+          // Calculate hash
+          const md = forge.md.sha256.create();
+          md.update(pdfWithPlaceholder.toString('binary'));
+          const hashToSign = md.digest().toHex();
 
-          // Store the client socket and pdf data to respond later
-          waitingClientSocket = ws;
-          pdfDataToSign = { pdfBuffer, pageIndex, selectionCoords };
+          // Sign hash
+          const signedHash = signHash(hashToSign);
+
+          // Sign PDF
+          const signedPdf = signpdf(pdfWithPlaceholder, cert, signedHash);
+
+          // Send signed PDF back to the client
+          ws.send(
+            JSON.stringify({
+              action: 'signed',
+              data: signedPdf.toString('base64'),
+            }),
+          );
+
+          console.log('Sent signed PDF to client');
         } catch (error) {
           console.error('Error signing PDF:', error);
           ws.send(
@@ -274,7 +250,7 @@ clientServer.on('connection', (ws) => {
             throw new Error('Missing PDF buffer for verification');
           }
 
-          const pdfBuffer = Buffer.from(new Uint8Array(Buff));
+          const pdfBuffer = Buffer.from(Buff, 'base64');
           const verifier = new VerifyPdf();
           const isVerified = await verifier.verify(pdfBuffer);
 
@@ -303,5 +279,4 @@ clientServer.on('connection', (ws) => {
   });
 });
 
-console.log('Client WebSocket server is running on port 5000');
-console.log('Extension WebSocket server is running on port 5001');
+console.log('WebSocket server is running on port 5000');
